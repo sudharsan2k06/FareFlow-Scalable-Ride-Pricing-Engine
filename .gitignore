@@ -1,0 +1,12 @@
+
+data/
+*.csv
+*.parquet
+*.zip
+*.json
+*.pkl
+*.joblib
+*.h5
+
+venv/
+__pycache__/
