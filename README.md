@@ -47,15 +47,6 @@ This project builds an **end-to-end ML pipeline** to predict NYC taxi `base_pass
   <em>Target distribution, feature analysis, and correlation heatmap</em>
 </p>
 
----
-
-### 🤖 Model Comparison
-
-<p align="center">
-  <img src="screenshots/model_comparison.png" width="800" />
-  <br />
-  <em>Baseline vs Tuned vs Improved — Actual vs Predicted scatter plots</em>
-</p>
 
 ---
 
