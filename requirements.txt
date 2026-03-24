@@ -1,1 +1,8 @@
-pip install pandas pyarrow scikit-learn lightgbm matplotlib seaborn joblib streamlit
+pandas
+pyarrow 
+scikit-learn 
+lightgbm
+matplotlib 
+seaborn
+joblib 
+streamlit
