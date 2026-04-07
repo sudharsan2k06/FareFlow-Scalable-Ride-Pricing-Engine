@@ -36,20 +36,29 @@ st.markdown("""
         color: white;
         text-align: center;
     }
+    .prediction-card {
+        background: linear-gradient(135deg, #667eea, #764ba2);
+        padding: 40px;
+        border-radius: 20px;
+        text-align: center;
+        color: white;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 
 # =============================================
-#        LOAD DATA & MODELS (Cached)
+#    CACHED FUNCTIONS — LOAD ONLY ONCE!
 # =============================================
-@st.cache_data
+
+@st.cache_data(show_spinner="Loading dataset...")
 def load_and_prepare_data():
+    """Load data and engineer features — runs ONLY ONCE"""
     files = glob.glob("../data/sampled/sample_*.parquet")
     dfs = [pd.read_parquet(f) for f in files]
     df = pd.concat(dfs, ignore_index=True)
 
-    # ---- Feature Engineering (same as improve_model.py) ----
+    # Feature Engineering
     df['total_extras'] = df['tips'] + df['tolls'] + df['congestion_surcharge'] + df['airport_fee']
     df['fare_per_mile'] = df['driver_pay'] / df['trip_miles'].replace(0, np.nan)
     df['fare_per_minute'] = df['driver_pay'] / df['trip_minutes'].replace(0, np.nan)
@@ -79,10 +88,9 @@ def load_and_prepare_data():
     df['time_x_congestion'] = df['trip_minutes'] * df['congestion_surcharge']
     df['distance_x_hour'] = df['trip_miles'] * df['pickup_hour']
 
-    df = df.fillna(0)
-    df = df.replace([np.inf, -np.inf], 0)
+    df = df.fillna(0).replace([np.inf, -np.inf], 0)
 
-    # Remove outliers
+    # Outlier removal
     q1 = df['base_passenger_fare'].quantile(0.01)
     q99 = df['base_passenger_fare'].quantile(0.99)
     df = df[(df['base_passenger_fare'] >= q1) & (df['base_passenger_fare'] <= q99)]
@@ -95,19 +103,30 @@ def load_and_prepare_data():
     return df
 
 
-@st.cache_resource
+@st.cache_resource(show_spinner="Loading models...")
 def load_models():
+    """Load trained models — runs ONLY ONCE"""
     baseline = joblib.load("../models/fare_model.pkl")
     tuned = joblib.load("../models/fare_model_tuned.pkl")
     improved = joblib.load("../models/fare_model_improved.pkl")
     return baseline, tuned, improved
 
 
-# ---- Load ----
+@st.cache_data(show_spinner="Preparing predictions...")
+def prepare_predictions(_baseline, _tuned, _improved, _X_test, _y_test, original_features):
+    """Generate predictions — runs ONLY ONCE"""
+    baseline_preds = _baseline.predict(_X_test[original_features])
+    tuned_preds = _tuned.predict(_X_test[original_features])
+    improved_preds = _improved.predict(_X_test)
+    return baseline_preds, tuned_preds, improved_preds
+
+
+# =============================================
+#    LOAD EVERYTHING (Cached — only first time)
+# =============================================
 df = load_and_prepare_data()
 baseline_model, tuned_model, improved_model = load_models()
 
-# ---- Features ----
 original_features = [
     "trip_miles", "trip_time", "PULocationID", "DOLocationID",
     "tips", "tolls", "congestion_surcharge", "airport_fee",
@@ -130,10 +149,10 @@ y = df[target]
 
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-# Predictions
-baseline_preds = baseline_model.predict(X_test[original_features])
-tuned_preds = tuned_model.predict(X_test[original_features])
-improved_preds = improved_model.predict(X_test)
+# Cached predictions
+baseline_preds, tuned_preds, improved_preds = prepare_predictions(
+    baseline_model, tuned_model, improved_model, X_test, y_test, original_features
+)
 
 # Metrics
 metrics = {}
@@ -143,6 +162,7 @@ for name, preds in [('Baseline', baseline_preds), ('Tuned', tuned_preds), ('Impr
         'RMSE': np.sqrt(mean_squared_error(y_test, preds)),
         'R2': r2_score(y_test, preds)
     }
+
 
 # =============================================
 #              SIDEBAR
@@ -164,8 +184,9 @@ st.sidebar.markdown("---")
 st.sidebar.success(f"""
 **Dataset:** {len(df):,} rides  
 **Features:** {len(all_features)}  
-**Models:** 3 (Baseline → Tuned → Improved)
+**Models:** 3
 """)
+
 
 # =============================================
 #         PAGE 1: OVERVIEW
@@ -179,7 +200,6 @@ if page == "🏠 Overview":
                 unsafe_allow_html=True)
     st.markdown("---")
 
-    # ---- Metric Cards ----
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
@@ -208,34 +228,22 @@ if page == "🏠 Overview":
                        / metrics['Baseline']['MAE'] * 100)
         st.markdown(f"""
         <div class='improvement-card'>
-            <div class='metric-label'>Total Improvement</div>
+            <div class='metric-label'>Improvement</div>
             <div class='metric-value'>{improvement:.1f}%</div>
         </div>""", unsafe_allow_html=True)
 
     st.markdown("---")
 
-    # ---- Journey Summary ----
     st.subheader("📍 Model Improvement Journey")
-
     journey = pd.DataFrame({
         'Stage': ['1. Baseline', '2. Tuned', '3. Improved'],
         'MAE ($)': [metrics['Baseline']['MAE'], metrics['Tuned']['MAE'], metrics['Improved']['MAE']],
         'RMSE ($)': [metrics['Baseline']['RMSE'], metrics['Tuned']['RMSE'], metrics['Improved']['RMSE']],
         'R²': [metrics['Baseline']['R2'], metrics['Tuned']['R2'], metrics['Improved']['R2']],
-        'What Changed': [
-            '14 features, default params',
-            '14 features, tuned params',
-            '31 features, tuned params + outlier removal'
-        ]
     })
+    st.dataframe(journey.style.format({'MAE ($)': '${:.2f}', 'RMSE ($)': '${:.2f}', 'R²': '{:.4f}'}),
+                 use_container_width=True)
 
-    st.dataframe(journey.style.format({
-        'MAE ($)': '${:.2f}',
-        'RMSE ($)': '${:.2f}',
-        'R²': '{:.4f}'
-    }), use_container_width=True)
-
-    # ---- MAE Progress Chart ----
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=['Baseline', 'Tuned', 'Improved'],
@@ -246,12 +254,9 @@ if page == "🏠 Overview":
         line=dict(color='#667eea', width=3),
         marker=dict(size=15)
     ))
-    fig.update_layout(
-        title="MAE Improvement Journey",
-        yaxis_title="MAE ($)",
-        height=400
-    )
+    fig.update_layout(title="MAE Improvement Journey", yaxis_title="MAE ($)", height=400)
     st.plotly_chart(fig, use_container_width=True)
+
 
 # =============================================
 #         PAGE 2: DATA EXPLORATION
@@ -266,13 +271,11 @@ elif page == "📊 Data Exploration":
     with tab1:
         col1, col2 = st.columns(2)
         with col1:
-            fig = px.histogram(df, x=target, nbins=100,
-                               title="Fare Distribution",
+            fig = px.histogram(df, x=target, nbins=100, title="Fare Distribution",
                                color_discrete_sequence=['#667eea'])
             fig.add_vline(x=y.mean(), line_dash="dash", line_color="red",
                           annotation_text=f"Mean: ${y.mean():.2f}")
             st.plotly_chart(fig, use_container_width=True)
-
         with col2:
             fig = px.box(df, y=target, title="Fare Box Plot",
                          color_discrete_sequence=['#f5576c'])
@@ -303,6 +306,7 @@ elif page == "📊 Data Exploration":
     with tab4:
         st.dataframe(df.head(100), use_container_width=True)
 
+
 # =============================================
 #         PAGE 3: MODEL COMPARISON
 # =============================================
@@ -311,9 +315,7 @@ elif page == "🤖 Model Comparison":
     st.title("🤖 Model Comparison")
     st.markdown("---")
 
-    # ---- Metrics Side by Side ----
     col1, col2, col3 = st.columns(3)
-
     for col, (name, color) in zip(
         [col1, col2, col3],
         [('Baseline', '🔴'), ('Tuned', '🟡'), ('Improved', '🟢')]
@@ -327,62 +329,32 @@ elif page == "🤖 Model Comparison":
     st.markdown("---")
 
     tab1, tab2, tab3, tab4 = st.tabs([
-        "🎯 Actual vs Predicted",
-        "📉 Residuals",
-        "📊 Error Distribution",
-        "🏆 Feature Importance"
+        "🎯 Actual vs Predicted", "📉 Residuals",
+        "📊 Error Distribution", "🏆 Feature Importance"
     ])
 
     with tab1:
         sample_size = st.slider("Sample size:", 1000, 20000, 5000)
         idx = np.random.choice(len(y_test), sample_size, replace=False)
 
-        model_choice = st.radio("Select Model:", ["All Models", "Baseline", "Tuned", "Improved"],
-                                horizontal=True)
-
-        if model_choice == "All Models":
-            fig = go.Figure()
-
-            for preds, name, color in [
-                (baseline_preds, 'Baseline', 'red'),
-                (tuned_preds, 'Tuned', 'orange'),
-                (improved_preds, 'Improved', 'green')
-            ]:
-                fig.add_trace(go.Scatter(
-                    x=y_test.values[idx], y=preds[idx],
-                    mode='markers', name=name,
-                    marker=dict(color=color, size=3, opacity=0.3)
-                ))
-
-            min_v, max_v = y_test.values[idx].min(), y_test.values[idx].max()
+        fig = go.Figure()
+        for preds, name, color in [
+            (baseline_preds, 'Baseline', 'red'),
+            (tuned_preds, 'Tuned', 'orange'),
+            (improved_preds, 'Improved', 'green')
+        ]:
             fig.add_trace(go.Scatter(
-                x=[min_v, max_v], y=[min_v, max_v],
-                mode='lines', name='Perfect',
-                line=dict(color='black', dash='dash', width=2)
+                x=y_test.values[idx], y=preds[idx],
+                mode='markers', name=name,
+                marker=dict(color=color, size=3, opacity=0.3)
             ))
-            fig.update_layout(title="Actual vs Predicted — All Models",
-                              xaxis_title="Actual ($)", yaxis_title="Predicted ($)", height=600)
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            pred_map = {'Baseline': baseline_preds, 'Tuned': tuned_preds, 'Improved': improved_preds}
-            color_map = {'Baseline': 'red', 'Tuned': 'orange', 'Improved': 'green'}
-            p = pred_map[model_choice]
-
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(
-                x=y_test.values[idx], y=p[idx],
-                mode='markers', name=model_choice,
-                marker=dict(color=color_map[model_choice], size=4, opacity=0.3)
-            ))
-            min_v, max_v = y_test.values[idx].min(), y_test.values[idx].max()
-            fig.add_trace(go.Scatter(
-                x=[min_v, max_v], y=[min_v, max_v],
-                mode='lines', name='Perfect',
-                line=dict(color='black', dash='dash')
-            ))
-            fig.update_layout(title=f"Actual vs Predicted — {model_choice}",
-                              xaxis_title="Actual ($)", yaxis_title="Predicted ($)", height=600)
-            st.plotly_chart(fig, use_container_width=True)
+        min_v, max_v = y_test.values[idx].min(), y_test.values[idx].max()
+        fig.add_trace(go.Scatter(x=[min_v, max_v], y=[min_v, max_v],
+                                 mode='lines', name='Perfect',
+                                 line=dict(color='black', dash='dash')))
+        fig.update_layout(title="Actual vs Predicted", height=600,
+                          xaxis_title="Actual ($)", yaxis_title="Predicted ($)")
+        st.plotly_chart(fig, use_container_width=True)
 
     with tab2:
         fig = go.Figure()
@@ -392,14 +364,12 @@ elif page == "🤖 Model Comparison":
             (improved_preds, 'Improved', 'green')
         ]:
             residuals = y_test.values - preds
-            fig.add_trace(go.Scatter(
-                x=preds[::10], y=residuals[::10],
-                mode='markers', name=name,
-                marker=dict(color=color, size=3, opacity=0.2)
-            ))
+            fig.add_trace(go.Scatter(x=preds[::10], y=residuals[::10],
+                                     mode='markers', name=name,
+                                     marker=dict(color=color, size=3, opacity=0.2)))
         fig.add_hline(y=0, line_dash="dash", line_color="black")
-        fig.update_layout(title="Residual Plot — All Models",
-                          xaxis_title="Predicted ($)", yaxis_title="Residual ($)", height=500)
+        fig.update_layout(title="Residual Plot", height=500,
+                          xaxis_title="Predicted ($)", yaxis_title="Residual ($)")
         st.plotly_chart(fig, use_container_width=True)
 
     with tab3:
@@ -410,14 +380,10 @@ elif page == "🤖 Model Comparison":
             (improved_preds, 'Improved', 'green')
         ]:
             errors = np.abs(y_test.values - preds)
-            fig.add_trace(go.Histogram(
-                x=errors, name=f"{name} (MAE=${np.mean(errors):.2f})",
-                opacity=0.5, nbinsx=100,
-                marker_color=color
-            ))
-        fig.update_layout(title="Error Distribution — All Models",
-                          xaxis_title="Absolute Error ($)", barmode='overlay',
-                          xaxis=dict(range=[0, 25]), height=500)
+            fig.add_trace(go.Histogram(x=errors, name=f"{name} (${np.mean(errors):.2f})",
+                                       opacity=0.5, nbinsx=100, marker_color=color))
+        fig.update_layout(title="Error Distribution", barmode='overlay',
+                          xaxis=dict(range=[0, 25]), xaxis_title="Absolute Error ($)", height=500)
         st.plotly_chart(fig, use_container_width=True)
 
     with tab4:
@@ -426,15 +392,15 @@ elif page == "🤖 Model Comparison":
             'Importance': improved_model.feature_importances_,
             'Type': ['🔵 Original' if f in original_features else '🟢 New' for f in all_features]
         }).sort_values('Importance', ascending=True)
-
         fig = px.bar(importance, x='Importance', y='Feature', color='Type',
-                     orientation='h', title="Feature Importance (Improved Model)",
+                     orientation='h', title="Feature Importance",
                      color_discrete_map={'🔵 Original': '#3498db', '🟢 New': '#27ae60'})
         fig.update_layout(height=700)
         st.plotly_chart(fig, use_container_width=True)
 
+
 # =============================================
-#         PAGE 4: PREDICT FARE
+#    PAGE 4: PREDICT FARE (FIXED — FAST!)
 # =============================================
 elif page == "🔮 Predict Fare":
 
@@ -456,7 +422,7 @@ elif page == "🔮 Predict Fare":
         pu_location = st.number_input("Pickup Location ID", 1, 265, 132)
         do_location = st.number_input("Dropoff Location ID", 1, 265, 68)
         pickup_hour = st.slider("Pickup Hour", 0, 23, 14)
-        pickup_day = st.selectbox("Day of Week",
+        pickup_day = st.selectbox("Day",
                                   ['Monday', 'Tuesday', 'Wednesday', 'Thursday',
                                    'Friday', 'Saturday', 'Sunday'])
         day_map = {'Monday': 0, 'Tuesday': 1, 'Wednesday': 2,
@@ -476,7 +442,7 @@ elif page == "🔮 Predict Fare":
 
     if st.button("🚕 PREDICT FARE", use_container_width=True, type="primary"):
 
-        # Calculate engineered features
+        # ---- Calculate engineered features (INSTANT — no data loading!) ----
         total_extras = tips + tolls + congestion + airport_fee
         fare_per_mile = driver_pay / trip_miles if trip_miles > 0 else 0
         fare_per_minute = driver_pay / trip_minutes if trip_minutes > 0 else 0
@@ -494,14 +460,15 @@ elif page == "🔮 Predict Fare":
         else: time_period = 4
 
         same_zone = 1 if pu_location == do_location else 0
-        airport_ids = [1, 132, 138]
-        is_airport_pickup = 1 if pu_location in airport_ids else 0
-        is_airport_dropoff = 1 if do_location in airport_ids else 0
+        airport_ids_list = [1, 132, 138]
+        is_airport_pickup = 1 if pu_location in airport_ids_list else 0
+        is_airport_dropoff = 1 if do_location in airport_ids_list else 0
         is_airport_trip = 1 if is_airport_pickup or is_airport_dropoff else 0
         miles_x_speed = trip_miles * trip_speed
         time_x_congestion = trip_minutes * congestion
         distance_x_hour = trip_miles * pickup_hour
 
+        # ---- Create single row DataFrame ----
         input_data = pd.DataFrame([[
             trip_miles, trip_time, pu_location, do_location,
             tips, tolls, congestion, airport_fee,
@@ -515,31 +482,46 @@ elif page == "🔮 Predict Fare":
             distance_x_hour
         ]], columns=all_features)
 
-        # All 3 predictions
+        # ---- Predict (INSTANT — model already loaded!) ----
         pred_baseline = baseline_model.predict(input_data[original_features])[0]
         pred_tuned = tuned_model.predict(input_data[original_features])[0]
         pred_improved = improved_model.predict(input_data)[0]
 
+        # ---- Show Results ----
         st.markdown("---")
 
-        # Show main prediction
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
             st.markdown(f"""
-            <div style='background:linear-gradient(135deg,#667eea,#764ba2);
-                        padding:40px; border-radius:20px;
-                        text-align:center; color:white;'>
+            <div class='prediction-card'>
                 <h2>🏆 Best Model Prediction</h2>
                 <h1 style='font-size:64px;'>${pred_improved:.2f}</h1>
+                <p>Estimated base passenger fare</p>
             </div>""", unsafe_allow_html=True)
 
         st.markdown("---")
 
-        # All 3 model predictions
         col1, col2, col3 = st.columns(3)
         col1.metric("🔴 Baseline", f"${pred_baseline:.2f}")
         col2.metric("🟡 Tuned", f"${pred_tuned:.2f}")
         col3.metric("🟢 Improved", f"${pred_improved:.2f}")
+
+        # Trip Summary
+        st.markdown("---")
+        st.subheader("📋 Trip Summary")
+        summary = pd.DataFrame({
+            'Detail': ['Distance', 'Duration', 'Speed', 'Pickup Hour',
+                       'Day', 'Weekend', 'Rush Hour', 'Airport Trip',
+                       'Driver Pay', 'Predicted Fare'],
+            'Value': [f'{trip_miles} miles', f'{trip_minutes:.1f} min',
+                      f'{trip_speed:.1f} mph', f'{pickup_hour}:00',
+                      pickup_day, 'Yes' if is_weekend else 'No',
+                      'Yes' if is_rush_hour else 'No',
+                      'Yes' if is_airport_trip else 'No',
+                      f'${driver_pay:.2f}', f'${pred_improved:.2f}']
+        })
+        st.table(summary)
+
 
 # =============================================
 #         PAGE 5: FEATURE ANALYSIS
@@ -577,7 +559,6 @@ elif page == "📈 Feature Analysis":
                          color_continuous_scale='sunset')
             st.plotly_chart(fig, use_container_width=True)
 
-        # Rush hour vs non-rush
         col1, col2 = st.columns(2)
         with col1:
             rush = df.groupby('is_rush_hour')[target].mean().reset_index()
@@ -591,17 +572,17 @@ elif page == "📈 Feature Analysis":
             airport = df.groupby('is_airport_trip')[target].mean().reset_index()
             airport['Type'] = airport['is_airport_trip'].map({0: 'Regular', 1: 'Airport'})
             fig = px.bar(airport, x='Type', y=target, color='Type',
-                         title="Airport vs Regular Trips",
+                         title="Airport vs Regular",
                          color_discrete_sequence=['steelblue', 'gold'])
             st.plotly_chart(fig, use_container_width=True)
 
     with tab3:
         st.dataframe(
             df[all_features + [target]].describe().T.style
-            .format("{:.2f}")
-            .background_gradient(cmap='Blues'),
+            .format("{:.2f}").background_gradient(cmap='Blues'),
             use_container_width=True
         )
+
 
 # =============================================
 #         PAGE 6: PROJECT REPORT
@@ -612,34 +593,27 @@ elif page == "📋 Project Report":
     st.markdown("---")
 
     st.markdown(f"""
-    ## 🚕 NYC Ride Fare Prediction — Final Report
+    ## 🚕 NYC Ride Fare Prediction — Summary
 
-    ### 📊 Dataset
+    ### Dataset
     - **Total Rides:** {len(df):,}
-    - **Features Used:** {len(all_features)} (14 original + 17 engineered)
-    - **Target Variable:** base_passenger_fare
-    - **Train/Test Split:** 80/20
+    - **Features:** {len(all_features)} (14 original + 17 engineered)
+    - **Target:** base_passenger_fare
 
-    ---
+    ### Model Evolution
 
-    ### 🤖 Model Evolution
+    | Stage | MAE | RMSE | R² |
+    |-------|-----|------|----|
+    | Baseline | ${metrics['Baseline']['MAE']:.2f} | ${metrics['Baseline']['RMSE']:.2f} | {metrics['Baseline']['R2']:.4f} |
+    | Tuned | ${metrics['Tuned']['MAE']:.2f} | ${metrics['Tuned']['RMSE']:.2f} | {metrics['Tuned']['R2']:.4f} |
+    | Improved | ${metrics['Improved']['MAE']:.2f} | ${metrics['Improved']['RMSE']:.2f} | {metrics['Improved']['R2']:.4f} |
 
-    | Stage | Model | MAE | RMSE | R² | Features |
-    |-------|-------|-----|------|-----|----------|
-    | 1 | Baseline LightGBM | ${metrics['Baseline']['MAE']:.2f} | ${metrics['Baseline']['RMSE']:.2f} | {metrics['Baseline']['R2']:.4f} | 14 |
-    | 2 | Tuned LightGBM | ${metrics['Tuned']['MAE']:.2f} | ${metrics['Tuned']['RMSE']:.2f} | {metrics['Tuned']['R2']:.4f} | 14 |
-    | 3 | Improved LightGBM | ${metrics['Improved']['MAE']:.2f} | ${metrics['Improved']['RMSE']:.2f} | {metrics['Improved']['R2']:.4f} | 31 |
-
-    ---
-
-    ### 🔧 Key Improvements
-    1. **Feature Engineering:** Created 17 new features (fare_per_mile, is_rush_hour, etc.)
-    2. **Outlier Removal:** Removed {((1000000 - len(df))/1000000*100):.1f}% extreme values
-    3. **Parameter Tuning:** Optimized n_estimators, learning_rate, max_depth
-
-    ---
-
-    ### 🏆 Top Features
+    ### Key Findings
+    1. **driver_pay** is the strongest predictor
+    2. **fare_per_minute** (engineered) ranked #2
+    3. **Outlier removal** improved RMSE by ~26%
+    4. **Feature engineering** > parameter tuning (5x)
+    5. Airport trips show distinct fare patterns
     """)
 
     importance = pd.DataFrame({
@@ -647,29 +621,10 @@ elif page == "📋 Project Report":
         'Importance': improved_model.feature_importances_,
         'Type': ['Original' if f in original_features else '⭐ New' for f in all_features]
     }).sort_values('Importance', ascending=False).head(10)
-
+    st.subheader("Top 10 Features")
     st.dataframe(importance, use_container_width=True)
 
-    st.markdown(f"""
-    ---
-
-    ### 📈 Results Summary
-    - **Best MAE:** ${metrics['Improved']['MAE']:.2f} (avg prediction error)
-    - **Best RMSE:** ${metrics['Improved']['RMSE']:.2f}
-    - **Total Improvement:** {((metrics['Improved']['MAE'] - metrics['Baseline']['MAE']) / metrics['Baseline']['MAE'] * 100):.1f}% from baseline
-    - **Algorithm:** LightGBM Regressor
-
-    ---
-
-    ### 💡 Key Findings
-    1. **driver_pay** is the strongest predictor of fare
-    2. **fare_per_minute** (engineered) ranked #2 in importance
-    3. **Outlier removal** improved RMSE by ~26%
-    4. **Feature engineering** added ~2.5% improvement on clean data
-    5. Airport trips have distinctly different fare patterns
-    """)
 
 # ---- Footer ----
 st.sidebar.markdown("---")
 st.sidebar.markdown("Built with ❤️ Streamlit")
-st.sidebar.markdown("Model: LightGBM")
