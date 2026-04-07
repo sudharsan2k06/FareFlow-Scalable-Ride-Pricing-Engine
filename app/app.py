@@ -5,8 +5,15 @@ import joblib
 import plotly.express as px
 import plotly.graph_objects as go
 import glob
+import os
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+
+# =============================================
+#    GET PROJECT ROOT DIRECTORY
+# =============================================
+# This works on BOTH your laptop AND Streamlit Cloud
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # ---- PAGE CONFIG ----
 st.set_page_config(
@@ -54,11 +61,23 @@ st.markdown("""
 @st.cache_data(show_spinner="Loading dataset...")
 def load_and_prepare_data():
     """Load data and engineer features — runs ONLY ONCE"""
-    files = glob.glob("../data/sampled/sample_*.parquet")
+    
+    # ✅ FIXED: Using BASE_DIR instead of ../
+    data_path = os.path.join(BASE_DIR, "data", "sampled", "sample_*.parquet")
+    files = glob.glob(data_path)
+    
+    # Check if files exist
+    if len(files) == 0:
+        st.error(f"❌ No data files found at: {data_path}")
+        st.error(f"BASE_DIR is: {BASE_DIR}")
+        st.stop()
+    
+    # Load only first 3 files to save memory on cloud
+    files = files[:3]
     dfs = [pd.read_parquet(f) for f in files]
     df = pd.concat(dfs, ignore_index=True)
 
-    # Feature Engineering
+    # ---- Feature Engineering ----
     df['total_extras'] = df['tips'] + df['tolls'] + df['congestion_surcharge'] + df['airport_fee']
     df['fare_per_mile'] = df['driver_pay'] / df['trip_miles'].replace(0, np.nan)
     df['fare_per_minute'] = df['driver_pay'] / df['trip_minutes'].replace(0, np.nan)
@@ -90,7 +109,7 @@ def load_and_prepare_data():
 
     df = df.fillna(0).replace([np.inf, -np.inf], 0)
 
-    # Outlier removal
+    # ---- Outlier Removal ----
     q1 = df['base_passenger_fare'].quantile(0.01)
     q99 = df['base_passenger_fare'].quantile(0.99)
     df = df[(df['base_passenger_fare'] >= q1) & (df['base_passenger_fare'] <= q99)]
@@ -106,33 +125,46 @@ def load_and_prepare_data():
 @st.cache_resource(show_spinner="Loading models...")
 def load_models():
     """Load trained models — runs ONLY ONCE"""
-    baseline = joblib.load("../models/fare_model.pkl")
-    tuned = joblib.load("../models/fare_model_tuned.pkl")
-    improved = joblib.load("../models/fare_model_improved.pkl")
+    
+    baseline_path = os.path.join(BASE_DIR, "models", "fare_model.pkl")
+    tuned_path = os.path.join(BASE_DIR, "models", "fare_model_tuned.pkl")
+    improved_path = os.path.join(BASE_DIR, "models", "fare_model_improved.pkl")
+    
+    # Check if models exist
+    for path, name in [(baseline_path, "Baseline"), (tuned_path, "Tuned"), (improved_path, "Improved")]:
+        if not os.path.exists(path):
+            st.error(f"❌ {name} model not found at: {path}")
+            st.error(f"BASE_DIR is: {BASE_DIR}")
+            st.stop()
+    
+    baseline = joblib.load(baseline_path)
+    tuned = joblib.load(tuned_path)
+    improved = joblib.load(improved_path)
+    
     return baseline, tuned, improved
 
 
-@st.cache_data(show_spinner="Preparing predictions...")
-def prepare_predictions(_baseline, _tuned, _improved, _X_test, _y_test, original_features):
+@st.cache_data(show_spinner="Generating predictions...")
+def prepare_predictions(_baseline, _tuned, _improved, X_test_df, y_test_series, original_features):
     """Generate predictions — runs ONLY ONCE"""
-    baseline_preds = _baseline.predict(_X_test[original_features])
-    tuned_preds = _tuned.predict(_X_test[original_features])
-    improved_preds = _improved.predict(_X_test)
+    baseline_preds = _baseline.predict(X_test_df[original_features])
+    tuned_preds = _tuned.predict(X_test_df[original_features])
+    improved_preds = _improved.predict(X_test_df)
     return baseline_preds, tuned_preds, improved_preds
 
 
-# =============================================
-#    LOAD EVERYTHING (Cached — only first time)
-# =============================================
+
 df = load_and_prepare_data()
 baseline_model, tuned_model, improved_model = load_models()
 
+# ---- Feature Lists ----
 original_features = [
     "trip_miles", "trip_time", "PULocationID", "DOLocationID",
     "tips", "tolls", "congestion_surcharge", "airport_fee",
     "driver_pay", "trip_minutes", "trip_speed",
     "pickup_hour", "pickup_dayofweek", "is_weekend"
 ]
+
 new_features = [
     "total_extras", "fare_per_mile", "fare_per_minute",
     "miles_per_minute", "is_long_trip", "is_short_trip",
@@ -141,6 +173,7 @@ new_features = [
     "is_airport_trip", "miles_x_speed", "time_x_congestion",
     "distance_x_hour"
 ]
+
 all_features = original_features + new_features
 target = "base_passenger_fare"
 
@@ -149,12 +182,12 @@ y = df[target]
 
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-# Cached predictions
+# ---- Cached Predictions ----
 baseline_preds, tuned_preds, improved_preds = prepare_predictions(
     baseline_model, tuned_model, improved_model, X_test, y_test, original_features
 )
 
-# Metrics
+# Calculate Metrics 
 metrics = {}
 for name, preds in [('Baseline', baseline_preds), ('Tuned', tuned_preds), ('Improved', improved_preds)]:
     metrics[name] = {
@@ -164,9 +197,8 @@ for name, preds in [('Baseline', baseline_preds), ('Tuned', tuned_preds), ('Impr
     }
 
 
-# =============================================
 #              SIDEBAR
-# =============================================
+
 st.sidebar.title("🚕 NYC Fare Predictor")
 st.sidebar.markdown("---")
 
@@ -187,10 +219,10 @@ st.sidebar.success(f"""
 **Models:** 3
 """)
 
+st.sidebar.markdown("---")
+st.sidebar.info("💡 First load takes ~30 sec as data is cached.")
 
-# =============================================
 #         PAGE 1: OVERVIEW
-# =============================================
 if page == "🏠 Overview":
 
     st.markdown("<h1 style='text-align:center;'>🚕 NYC Ride Fare Prediction</h1>",
@@ -200,6 +232,7 @@ if page == "🏠 Overview":
                 unsafe_allow_html=True)
     st.markdown("---")
 
+    # ---- Metric Cards ----
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
@@ -234,6 +267,7 @@ if page == "🏠 Overview":
 
     st.markdown("---")
 
+    # ---- Journey Table ----
     st.subheader("📍 Model Improvement Journey")
     journey = pd.DataFrame({
         'Stage': ['1. Baseline', '2. Tuned', '3. Improved'],
@@ -244,6 +278,7 @@ if page == "🏠 Overview":
     st.dataframe(journey.style.format({'MAE ($)': '${:.2f}', 'RMSE ($)': '${:.2f}', 'R²': '{:.4f}'}),
                  use_container_width=True)
 
+    # ---- MAE Chart ----
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=['Baseline', 'Tuned', 'Improved'],
@@ -315,6 +350,7 @@ elif page == "🤖 Model Comparison":
     st.title("🤖 Model Comparison")
     st.markdown("---")
 
+    # ---- Metrics Side by Side ----
     col1, col2, col3 = st.columns(3)
     for col, (name, color) in zip(
         [col1, col2, col3],
@@ -335,7 +371,7 @@ elif page == "🤖 Model Comparison":
 
     with tab1:
         sample_size = st.slider("Sample size:", 1000, 20000, 5000)
-        idx = np.random.choice(len(y_test), sample_size, replace=False)
+        idx = np.random.choice(len(y_test), min(sample_size, len(y_test)), replace=False)
 
         fig = go.Figure()
         for preds, name, color in [
@@ -400,7 +436,7 @@ elif page == "🤖 Model Comparison":
 
 
 # =============================================
-#    PAGE 4: PREDICT FARE (FIXED — FAST!)
+#    PAGE 4: PREDICT FARE (FAST!)
 # =============================================
 elif page == "🔮 Predict Fare":
 
@@ -442,7 +478,7 @@ elif page == "🔮 Predict Fare":
 
     if st.button("🚕 PREDICT FARE", use_container_width=True, type="primary"):
 
-        # ---- Calculate engineered features (INSTANT — no data loading!) ----
+        # ---- Calculate Engineered Features (INSTANT) ----
         total_extras = tips + tolls + congestion + airport_fee
         fare_per_mile = driver_pay / trip_miles if trip_miles > 0 else 0
         fare_per_minute = driver_pay / trip_minutes if trip_minutes > 0 else 0
@@ -468,7 +504,7 @@ elif page == "🔮 Predict Fare":
         time_x_congestion = trip_minutes * congestion
         distance_x_hour = trip_miles * pickup_hour
 
-        # ---- Create single row DataFrame ----
+        # ---- Create Single Row DataFrame ----
         input_data = pd.DataFrame([[
             trip_miles, trip_time, pu_location, do_location,
             tips, tolls, congestion, airport_fee,
@@ -482,7 +518,7 @@ elif page == "🔮 Predict Fare":
             distance_x_hour
         ]], columns=all_features)
 
-        # ---- Predict (INSTANT — model already loaded!) ----
+        # ---- Predict (INSTANT — models already loaded!) ----
         pred_baseline = baseline_model.predict(input_data[original_features])[0]
         pred_tuned = tuned_model.predict(input_data[original_features])[0]
         pred_improved = improved_model.predict(input_data)[0]
@@ -501,6 +537,7 @@ elif page == "🔮 Predict Fare":
 
         st.markdown("---")
 
+        # All 3 model predictions
         col1, col2, col3 = st.columns(3)
         col1.metric("🔴 Baseline", f"${pred_baseline:.2f}")
         col2.metric("🟡 Tuned", f"${pred_tuned:.2f}")
@@ -595,36 +632,55 @@ elif page == "📋 Project Report":
     st.markdown(f"""
     ## 🚕 NYC Ride Fare Prediction — Summary
 
-    ### Dataset
+    ### 📊 Dataset
     - **Total Rides:** {len(df):,}
     - **Features:** {len(all_features)} (14 original + 17 engineered)
     - **Target:** base_passenger_fare
 
-    ### Model Evolution
+    ---
+
+    ### 🤖 Model Evolution
 
     | Stage | MAE | RMSE | R² |
     |-------|-----|------|----|
-    | Baseline | ${metrics['Baseline']['MAE']:.2f} | ${metrics['Baseline']['RMSE']:.2f} | {metrics['Baseline']['R2']:.4f} |
-    | Tuned | ${metrics['Tuned']['MAE']:.2f} | ${metrics['Tuned']['RMSE']:.2f} | {metrics['Tuned']['R2']:.4f} |
-    | Improved | ${metrics['Improved']['MAE']:.2f} | ${metrics['Improved']['RMSE']:.2f} | {metrics['Improved']['R2']:.4f} |
+    | 🔴 Baseline | ${metrics['Baseline']['MAE']:.2f} | ${metrics['Baseline']['RMSE']:.2f} | {metrics['Baseline']['R2']:.4f} |
+    | 🟡 Tuned | ${metrics['Tuned']['MAE']:.2f} | ${metrics['Tuned']['RMSE']:.2f} | {metrics['Tuned']['R2']:.4f} |
+    | 🟢 Improved | ${metrics['Improved']['MAE']:.2f} | ${metrics['Improved']['RMSE']:.2f} | {metrics['Improved']['R2']:.4f} |
 
-    ### Key Findings
-    1. **driver_pay** is the strongest predictor
-    2. **fare_per_minute** (engineered) ranked #2
+    ---
+
+    ### 💡 Key Findings
+    
+    1. **driver_pay** is the strongest predictor of fare
+    2. **fare_per_minute** (engineered) ranked #2 in importance
     3. **Outlier removal** improved RMSE by ~26%
-    4. **Feature engineering** > parameter tuning (5x)
+    4. **Feature engineering** > parameter tuning (5x more impact)
     5. Airport trips show distinct fare patterns
+    
+    ---
+    
+    ### 🔧 Tech Stack
+    
+    - **Language:** Python
+    - **ML Model:** LightGBM Regressor
+    - **Dashboard:** Streamlit
+    - **Visualizations:** Plotly
+    - **Data Processing:** Pandas, NumPy
     """)
 
+    # Top Features
+    st.subheader("🏆 Top 10 Features")
     importance = pd.DataFrame({
         'Feature': all_features,
         'Importance': improved_model.feature_importances_,
         'Type': ['Original' if f in original_features else '⭐ New' for f in all_features]
     }).sort_values('Importance', ascending=False).head(10)
-    st.subheader("Top 10 Features")
     st.dataframe(importance, use_container_width=True)
 
 
-# ---- Footer ----
+# =============================================
+#              FOOTER
+# =============================================
 st.sidebar.markdown("---")
-st.sidebar.markdown("Built with ❤️ Streamlit")
+st.sidebar.markdown("Built with ❤️ using Streamlit")
+st.sidebar.markdown("[GitHub Repo](https://github.com/your-username/nyc-fare-prediction)")
