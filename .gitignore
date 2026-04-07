@@ -1,12 +1,54 @@
+# =============================================
+#    IGNORE LARGE/UNNECESSARY FILES
+# =============================================
 
-data/
-*.csv
-*.parquet
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# =============================================
+#    IGNORE RAW/LARGE DATA (Keep locally)
+# =============================================
+
+# Raw data folders (too large)
+data/raw/
+data/processed/
+data/feature_engineered/
+data/sampled/
+
+# Large files
 *.zip
 *.json
-*.pkl
-*.joblib
 *.h5
 
-venv/
-__pycache__/
+# CSV files (except specific ones if needed)
+*.csv
+
+# =============================================
+#    DO NOT IGNORE THESE (Needed for deployment)
+# =============================================
+
+# ✅ Allow the deployment parquet file
+!data/combined_sample.parquet
+
+# ✅ Allow model files
+!models/*.pkl
+
+# =============================================

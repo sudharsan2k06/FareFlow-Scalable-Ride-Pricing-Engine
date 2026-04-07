@@ -12,8 +12,18 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 # =============================================
 #    GET PROJECT ROOT DIRECTORY
 # =============================================
-# This works on BOTH your laptop AND Streamlit Cloud
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# =============================================
+#    YOUR FOLDER PATHS — CHANGE HERE ONLY!
+# =============================================
+# Option 1: If you RENAMED the folder to "data"
+DATA_FOLDER = "data"
+
+# Option 2: If you kept original name (uncomment this, comment above)
+# DATA_FOLDER = "Tuned&Comparison csv_files"
+
+MODELS_FOLDER = "models"
 
 # ---- PAGE CONFIG ----
 st.set_page_config(
@@ -55,6 +65,35 @@ st.markdown("""
 
 
 # =============================================
+#    DEBUG FUNCTION
+# =============================================
+def show_debug_info():
+    """Show what files exist — helps debug deployment issues"""
+    st.error("❌ Files not found!")
+    st.write(f"**BASE_DIR:** `{BASE_DIR}`")
+    
+    st.write("---")
+    st.write("**📁 All folders and files in project:**")
+    
+    for root, dirs, files in os.walk(BASE_DIR):
+        # Skip hidden folders and venv
+        dirs[:] = [d for d in dirs if not d.startswith('.') and d != 'venv' and d != '__pycache__']
+        
+        level = root.replace(BASE_DIR, '').count(os.sep)
+        indent = '  ' * level
+        folder_name = os.path.basename(root) or 'ROOT'
+        st.write(f"{indent}📂 **{folder_name}/**")
+        
+        subindent = '  ' * (level + 1)
+        for file in files[:15]:
+            st.write(f"{subindent}📄 {file}")
+        if len(files) > 15:
+            st.write(f"{subindent}*... and {len(files) - 15} more files*")
+    
+    st.stop()
+
+
+# =============================================
 #    CACHED FUNCTIONS — LOAD ONLY ONCE!
 # =============================================
 
@@ -62,17 +101,33 @@ st.markdown("""
 def load_and_prepare_data():
     """Load data and engineer features — runs ONLY ONCE"""
     
-    # ✅ FIXED: Using BASE_DIR instead of ../
-    data_path = os.path.join(BASE_DIR, "data", "sampled", "sample_*.parquet")
-    files = glob.glob(data_path)
+    # ✅ YOUR DATA FOLDER
+    data_dir = os.path.join(BASE_DIR, DATA_FOLDER)
     
-    # Check if files exist
+    # Try to find parquet files
+    parquet_pattern = os.path.join(data_dir, "*.parquet")
+    files = glob.glob(parquet_pattern)
+    
+    # If not found, show debug info
     if len(files) == 0:
-        st.error(f"❌ No data files found at: {data_path}")
-        st.error(f"BASE_DIR is: {BASE_DIR}")
+        st.error(f"❌ No .parquet files found in: `{data_dir}`")
+        st.write(f"Looking for pattern: `{parquet_pattern}`")
+        
+        # Check if folder exists
+        if os.path.exists(data_dir):
+            st.write(f"✅ Folder exists: `{data_dir}`")
+            st.write("Files in folder:")
+            for f in os.listdir(data_dir)[:20]:
+                st.write(f"  - {f}")
+        else:
+            st.write(f"❌ Folder does NOT exist: `{data_dir}`")
+            show_debug_info()
+        
         st.stop()
     
-    # Load only first 3 files to save memory on cloud
+    st.sidebar.success(f"✅ Found {len(files)} data file(s)")
+    
+    # Load files (limit to 3 for memory on cloud)
     files = files[:3]
     dfs = [pd.read_parquet(f) for f in files]
     df = pd.concat(dfs, ignore_index=True)
@@ -126,21 +181,42 @@ def load_and_prepare_data():
 def load_models():
     """Load trained models — runs ONLY ONCE"""
     
-    baseline_path = os.path.join(BASE_DIR, "models", "fare_model.pkl")
-    tuned_path = os.path.join(BASE_DIR, "models", "fare_model_tuned.pkl")
-    improved_path = os.path.join(BASE_DIR, "models", "fare_model_improved.pkl")
+    # ✅ YOUR MODELS FOLDER
+    models_dir = os.path.join(BASE_DIR, MODELS_FOLDER)
+    
+    baseline_path = os.path.join(models_dir, "fare_model.pkl")
+    tuned_path = os.path.join(models_dir, "fare_model_tuned.pkl")
+    improved_path = os.path.join(models_dir, "fare_model_improved.pkl")
     
     # Check if models exist
+    missing = []
     for path, name in [(baseline_path, "Baseline"), (tuned_path, "Tuned"), (improved_path, "Improved")]:
         if not os.path.exists(path):
-            st.error(f"❌ {name} model not found at: {path}")
-            st.error(f"BASE_DIR is: {BASE_DIR}")
-            st.stop()
+            missing.append((name, path))
+    
+    if missing:
+        st.error("❌ Models not found!")
+        for name, path in missing:
+            st.write(f"- **{name}**: `{path}`")
+        
+        st.write("---")
+        st.write(f"**Models folder:** `{models_dir}`")
+        
+        if os.path.exists(models_dir):
+            st.write("**Files in models folder:**")
+            for f in os.listdir(models_dir):
+                st.write(f"  - {f}")
+        else:
+            st.write("❌ Models folder does NOT exist!")
+            show_debug_info()
+        
+        st.stop()
     
     baseline = joblib.load(baseline_path)
     tuned = joblib.load(tuned_path)
     improved = joblib.load(improved_path)
     
+    st.sidebar.success("✅ All models loaded")
     return baseline, tuned, improved
 
 
@@ -153,7 +229,9 @@ def prepare_predictions(_baseline, _tuned, _improved, X_test_df, y_test_series, 
     return baseline_preds, tuned_preds, improved_preds
 
 
-
+# =============================================
+#    LOAD EVERYTHING
+# =============================================
 df = load_and_prepare_data()
 baseline_model, tuned_model, improved_model = load_models()
 
@@ -187,7 +265,7 @@ baseline_preds, tuned_preds, improved_preds = prepare_predictions(
     baseline_model, tuned_model, improved_model, X_test, y_test, original_features
 )
 
-# Calculate Metrics 
+# ---- Calculate Metrics ----
 metrics = {}
 for name, preds in [('Baseline', baseline_preds), ('Tuned', tuned_preds), ('Improved', improved_preds)]:
     metrics[name] = {
@@ -197,8 +275,9 @@ for name, preds in [('Baseline', baseline_preds), ('Tuned', tuned_preds), ('Impr
     }
 
 
+# =============================================
 #              SIDEBAR
-
+# =============================================
 st.sidebar.title("🚕 NYC Fare Predictor")
 st.sidebar.markdown("---")
 
@@ -219,10 +298,10 @@ st.sidebar.success(f"""
 **Models:** 3
 """)
 
-st.sidebar.markdown("---")
-st.sidebar.info("💡 First load takes ~30 sec as data is cached.")
 
+# =============================================
 #         PAGE 1: OVERVIEW
+# =============================================
 if page == "🏠 Overview":
 
     st.markdown("<h1 style='text-align:center;'>🚕 NYC Ride Fare Prediction</h1>",
@@ -232,7 +311,6 @@ if page == "🏠 Overview":
                 unsafe_allow_html=True)
     st.markdown("---")
 
-    # ---- Metric Cards ----
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
@@ -267,7 +345,6 @@ if page == "🏠 Overview":
 
     st.markdown("---")
 
-    # ---- Journey Table ----
     st.subheader("📍 Model Improvement Journey")
     journey = pd.DataFrame({
         'Stage': ['1. Baseline', '2. Tuned', '3. Improved'],
@@ -278,7 +355,6 @@ if page == "🏠 Overview":
     st.dataframe(journey.style.format({'MAE ($)': '${:.2f}', 'RMSE ($)': '${:.2f}', 'R²': '{:.4f}'}),
                  use_container_width=True)
 
-    # ---- MAE Chart ----
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=['Baseline', 'Tuned', 'Improved'],
@@ -350,7 +426,6 @@ elif page == "🤖 Model Comparison":
     st.title("🤖 Model Comparison")
     st.markdown("---")
 
-    # ---- Metrics Side by Side ----
     col1, col2, col3 = st.columns(3)
     for col, (name, color) in zip(
         [col1, col2, col3],
@@ -436,7 +511,7 @@ elif page == "🤖 Model Comparison":
 
 
 # =============================================
-#    PAGE 4: PREDICT FARE (FAST!)
+#    PAGE 4: PREDICT FARE
 # =============================================
 elif page == "🔮 Predict Fare":
 
@@ -478,7 +553,7 @@ elif page == "🔮 Predict Fare":
 
     if st.button("🚕 PREDICT FARE", use_container_width=True, type="primary"):
 
-        # ---- Calculate Engineered Features (INSTANT) ----
+        # Calculate engineered features
         total_extras = tips + tolls + congestion + airport_fee
         fare_per_mile = driver_pay / trip_miles if trip_miles > 0 else 0
         fare_per_minute = driver_pay / trip_minutes if trip_minutes > 0 else 0
@@ -504,7 +579,6 @@ elif page == "🔮 Predict Fare":
         time_x_congestion = trip_minutes * congestion
         distance_x_hour = trip_miles * pickup_hour
 
-        # ---- Create Single Row DataFrame ----
         input_data = pd.DataFrame([[
             trip_miles, trip_time, pu_location, do_location,
             tips, tolls, congestion, airport_fee,
@@ -518,12 +592,10 @@ elif page == "🔮 Predict Fare":
             distance_x_hour
         ]], columns=all_features)
 
-        # ---- Predict (INSTANT — models already loaded!) ----
         pred_baseline = baseline_model.predict(input_data[original_features])[0]
         pred_tuned = tuned_model.predict(input_data[original_features])[0]
         pred_improved = improved_model.predict(input_data)[0]
 
-        # ---- Show Results ----
         st.markdown("---")
 
         col1, col2, col3 = st.columns([1, 2, 1])
@@ -537,27 +609,10 @@ elif page == "🔮 Predict Fare":
 
         st.markdown("---")
 
-        # All 3 model predictions
         col1, col2, col3 = st.columns(3)
         col1.metric("🔴 Baseline", f"${pred_baseline:.2f}")
         col2.metric("🟡 Tuned", f"${pred_tuned:.2f}")
         col3.metric("🟢 Improved", f"${pred_improved:.2f}")
-
-        # Trip Summary
-        st.markdown("---")
-        st.subheader("📋 Trip Summary")
-        summary = pd.DataFrame({
-            'Detail': ['Distance', 'Duration', 'Speed', 'Pickup Hour',
-                       'Day', 'Weekend', 'Rush Hour', 'Airport Trip',
-                       'Driver Pay', 'Predicted Fare'],
-            'Value': [f'{trip_miles} miles', f'{trip_minutes:.1f} min',
-                      f'{trip_speed:.1f} mph', f'{pickup_hour}:00',
-                      pickup_day, 'Yes' if is_weekend else 'No',
-                      'Yes' if is_rush_hour else 'No',
-                      'Yes' if is_airport_trip else 'No',
-                      f'${driver_pay:.2f}', f'${pred_improved:.2f}']
-        })
-        st.table(summary)
 
 
 # =============================================
@@ -596,23 +651,6 @@ elif page == "📈 Feature Analysis":
                          color_continuous_scale='sunset')
             st.plotly_chart(fig, use_container_width=True)
 
-        col1, col2 = st.columns(2)
-        with col1:
-            rush = df.groupby('is_rush_hour')[target].mean().reset_index()
-            rush['Type'] = rush['is_rush_hour'].map({0: 'Normal', 1: 'Rush Hour'})
-            fig = px.bar(rush, x='Type', y=target, color='Type',
-                         title="Rush Hour vs Normal",
-                         color_discrete_sequence=['steelblue', 'coral'])
-            st.plotly_chart(fig, use_container_width=True)
-
-        with col2:
-            airport = df.groupby('is_airport_trip')[target].mean().reset_index()
-            airport['Type'] = airport['is_airport_trip'].map({0: 'Regular', 1: 'Airport'})
-            fig = px.bar(airport, x='Type', y=target, color='Type',
-                         title="Airport vs Regular",
-                         color_discrete_sequence=['steelblue', 'gold'])
-            st.plotly_chart(fig, use_container_width=True)
-
     with tab3:
         st.dataframe(
             df[all_features + [target]].describe().T.style
@@ -632,55 +670,34 @@ elif page == "📋 Project Report":
     st.markdown(f"""
     ## 🚕 NYC Ride Fare Prediction — Summary
 
-    ### 📊 Dataset
+    ### Dataset
     - **Total Rides:** {len(df):,}
     - **Features:** {len(all_features)} (14 original + 17 engineered)
     - **Target:** base_passenger_fare
 
-    ---
-
-    ### 🤖 Model Evolution
+    ### Model Evolution
 
     | Stage | MAE | RMSE | R² |
     |-------|-----|------|----|
-    | 🔴 Baseline | ${metrics['Baseline']['MAE']:.2f} | ${metrics['Baseline']['RMSE']:.2f} | {metrics['Baseline']['R2']:.4f} |
-    | 🟡 Tuned | ${metrics['Tuned']['MAE']:.2f} | ${metrics['Tuned']['RMSE']:.2f} | {metrics['Tuned']['R2']:.4f} |
-    | 🟢 Improved | ${metrics['Improved']['MAE']:.2f} | ${metrics['Improved']['RMSE']:.2f} | {metrics['Improved']['R2']:.4f} |
+    | Baseline | ${metrics['Baseline']['MAE']:.2f} | ${metrics['Baseline']['RMSE']:.2f} | {metrics['Baseline']['R2']:.4f} |
+    | Tuned | ${metrics['Tuned']['MAE']:.2f} | ${metrics['Tuned']['RMSE']:.2f} | {metrics['Tuned']['R2']:.4f} |
+    | Improved | ${metrics['Improved']['MAE']:.2f} | ${metrics['Improved']['RMSE']:.2f} | {metrics['Improved']['R2']:.4f} |
 
-    ---
-
-    ### 💡 Key Findings
-    
-    1. **driver_pay** is the strongest predictor of fare
-    2. **fare_per_minute** (engineered) ranked #2 in importance
-    3. **Outlier removal** improved RMSE by ~26%
-    4. **Feature engineering** > parameter tuning (5x more impact)
-    5. Airport trips show distinct fare patterns
-    
-    ---
-    
-    ### 🔧 Tech Stack
-    
-    - **Language:** Python
-    - **ML Model:** LightGBM Regressor
-    - **Dashboard:** Streamlit
-    - **Visualizations:** Plotly
-    - **Data Processing:** Pandas, NumPy
+    ### Key Findings
+    1. **driver_pay** is the strongest predictor
+    2. **fare_per_minute** (engineered) ranked #2
+    3. **Feature engineering** > parameter tuning
     """)
 
-    # Top Features
-    st.subheader("🏆 Top 10 Features")
     importance = pd.DataFrame({
         'Feature': all_features,
         'Importance': improved_model.feature_importances_,
         'Type': ['Original' if f in original_features else '⭐ New' for f in all_features]
     }).sort_values('Importance', ascending=False).head(10)
+    st.subheader("🏆 Top 10 Features")
     st.dataframe(importance, use_container_width=True)
 
 
-# =============================================
-#              FOOTER
-# =============================================
+# ---- Footer ----
 st.sidebar.markdown("---")
-st.sidebar.markdown("Built with ❤️ using Streamlit")
-st.sidebar.markdown("[GitHub Repo](https://github.com/your-username/nyc-fare-prediction)")
+st.sidebar.markdown("Built with ❤️ Streamlit")
