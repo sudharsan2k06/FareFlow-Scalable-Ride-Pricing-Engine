@@ -616,7 +616,7 @@ elif page == "🔮 Predict Fare":
 
 
 # =============================================
-#         PAGE 5: FEATURE ANALYSIS
+#    PAGE 5: FEATURE ANALYSIS
 # =============================================
 elif page == "📈 Feature Analysis":
 
@@ -625,39 +625,146 @@ elif page == "📈 Feature Analysis":
 
     tab1, tab2, tab3 = st.tabs(["🔍 Feature vs Fare", "⏰ Time Patterns", "📊 Stats"])
 
+    # ---- TAB 1: Feature vs Fare ----
     with tab1:
-        selected = st.selectbox("Select Feature:", all_features, key="fa_feat")
+        st.subheader("🔍 Feature vs Fare Relationship")
+        
+        selected = st.selectbox("Select Feature:", all_features)
         sample_df = df.sample(min(10000, len(df)), random_state=42)
-        fig = px.scatter(sample_df, x=selected, y=target, opacity=0.3,
-                         trendline="ols", color_discrete_sequence=['teal'],
-                         title=f"{selected} vs Fare")
-        st.plotly_chart(fig, use_container_width=True)
-
-    with tab2:
-        col1, col2 = st.columns(2)
-        with col1:
-            hourly = df.groupby('pickup_hour')[target].mean().reset_index()
-            fig = px.bar(hourly, x='pickup_hour', y=target,
-                         title="Average Fare by Hour", color=target,
-                         color_continuous_scale='teal')
-            st.plotly_chart(fig, use_container_width=True)
-
-        with col2:
-            days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-            daily = df.groupby('pickup_dayofweek')[target].mean().reset_index()
-            daily['day'] = days
-            fig = px.bar(daily, x='day', y=target,
-                         title="Average Fare by Day", color=target,
-                         color_continuous_scale='sunset')
-            st.plotly_chart(fig, use_container_width=True)
-
-    with tab3:
-        st.dataframe(
-            df[all_features + [target]].describe().T.style
-            .format("{:.2f}").background_gradient(cmap='Blues'),
-            use_container_width=True
+        
+        # ✅ FIXED: Removed trendline="ols"
+        fig = px.scatter(
+            sample_df, 
+            x=selected, 
+            y=target, 
+            opacity=0.3,
+            color_discrete_sequence=['teal'],
+            title=f"{selected} vs Fare"
         )
+        fig.update_layout(height=500)
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Show correlation
+        if selected in df.columns and target in df.columns:
+            corr = df[selected].corr(df[target])
+            st.info(f"📊 Correlation between **{selected}** and **{target}**: **{corr:.4f}**")
 
+    # ---- TAB 2: Time Patterns ----
+    with tab2:
+        st.subheader("⏰ Time-Based Patterns")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Hourly pattern
+            if 'pickup_hour' in df.columns:
+                hourly = df.groupby('pickup_hour')[target].mean().reset_index()
+                fig = px.bar(
+                    hourly, 
+                    x='pickup_hour', 
+                    y=target, 
+                    title="Average Fare by Hour",
+                    color=target, 
+                    color_continuous_scale='teal'
+                )
+                fig.update_layout(height=400)
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.warning("pickup_hour column not found")
+        
+        with col2:
+            # Daily pattern
+            if 'pickup_dayofweek' in df.columns:
+                days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+                daily = df.groupby('pickup_dayofweek')[target].mean().reset_index()
+                
+                # Safe day name mapping
+                daily['day'] = daily['pickup_dayofweek'].apply(
+                    lambda x: days[int(x)] if 0 <= int(x) < 7 else 'Unknown'
+                )
+                
+                fig = px.bar(
+                    daily, 
+                    x='day', 
+                    y=target, 
+                    title="Average Fare by Day",
+                    color=target, 
+                    color_continuous_scale='sunset'
+                )
+                fig.update_layout(height=400)
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.warning("pickup_dayofweek column not found")
+        
+        # Rush hour vs Normal
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if 'is_rush_hour' in df.columns:
+                rush = df.groupby('is_rush_hour')[target].mean().reset_index()
+                rush['Type'] = rush['is_rush_hour'].map({0: 'Normal', 1: 'Rush Hour'})
+                fig = px.bar(
+                    rush, 
+                    x='Type', 
+                    y=target, 
+                    color='Type',
+                    title="Rush Hour vs Normal",
+                    color_discrete_sequence=['steelblue', 'coral']
+                )
+                fig.update_layout(height=400, showlegend=False)
+                st.plotly_chart(fig, use_container_width=True)
+        
+        with col2:
+            if 'is_airport_trip' in df.columns:
+                airport = df.groupby('is_airport_trip')[target].mean().reset_index()
+                airport['Type'] = airport['is_airport_trip'].map({0: 'Regular', 1: 'Airport'})
+                fig = px.bar(
+                    airport, 
+                    x='Type', 
+                    y=target, 
+                    color='Type',
+                    title="Airport vs Regular Trips",
+                    color_discrete_sequence=['steelblue', 'gold']
+                )
+                fig.update_layout(height=400, showlegend=False)
+                st.plotly_chart(fig, use_container_width=True)
+
+    # ---- TAB 3: Stats ----
+    with tab3:
+        st.subheader("📊 Feature Statistics")
+        
+        # Get numeric columns only
+        numeric_cols = df[all_features + [target]].select_dtypes(include=[np.number]).columns.tolist()
+        
+        if len(numeric_cols) > 0:
+            stats_df = df[numeric_cols].describe().T
+            
+            # Format nicely
+            st.dataframe(
+                stats_df.style.format("{:.2f}").background_gradient(cmap='Blues', axis=1),
+                use_container_width=True,
+                height=600
+            )
+        else:
+            st.warning("No numeric columns found for statistics")
+        
+        st.markdown("---")
+        
+        # Missing values
+        st.subheader("🔍 Missing Values")
+        missing = df[all_features + [target]].isnull().sum()
+        missing_pct = (missing / len(df) * 100).round(2)
+        
+        missing_df = pd.DataFrame({
+            'Column': missing.index,
+            'Missing Count': missing.values,
+            'Missing %': missing_pct.values
+        }).sort_values('Missing %', ascending=False)
+        
+        if missing_df['Missing Count'].sum() > 0:
+            st.dataframe(missing_df[missing_df['Missing Count'] > 0], use_container_width=True)
+        else:
+            st.success("✅ No missing values!")
 
 # =============================================
 #         PAGE 6: PROJECT REPORT
